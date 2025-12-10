@@ -147,112 +147,131 @@ def gerar_grafico_collar(df: pd.DataFrame, ticker: str) -> BytesIO:
     return buf
 
 
-# ------------------------------------------------------------
-# ABA AP – ALOCAÇÃO PROTEGIDA
-# ------------------------------------------------------------
-with tab_ap:
-    st.subheader("🛡️ Estratégia Alocação Protegida (AP)")
+# ============================================================
+# FUNÇÕES – AP (ALOCAÇÃO PROTEGIDA)
+# ============================================================
 
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("**Configurações – AP**")
+def norm_cdf(x: float) -> float:
+    return 0.5 * (1.0 + erf(x / sqrt(2.0)))
 
-    ticker_ap = st.sidebar.text_input("Ticker (AP):", "EZTC3.SA", key="ticker_ap")
 
-    prazo_du_ap = st.sidebar.number_input(
-        "Prazo da operação (dias úteis) – AP:",
-        value=63,
-        step=1,
-        format="%d",
-        key="prazo_ap"
+def black_scholes_put(S0: float, K: float, r: float, sigma: float, T: float) -> float:
+    """Preço justo de put europeia via Black-Scholes (σ anual, r anual)."""
+    if T <= 0:
+        return max(K - S0, 0.0)
+    if sigma <= 0:
+        return max(K - S0 * exp(-r * T), 0.0)
+
+    d1 = (log(S0 / K) + (r + 0.5 * sigma**2) * T) / (sigma * sqrt(T))
+    d2 = d1 - sigma * sqrt(T)
+
+    put_price = K * exp(-r * T) * norm_cdf(-d2) - S0 * norm_cdf(-d1)
+    return max(put_price, 0.0)
+
+
+def estimar_vol_anual(precos: pd.Series, dias_ano: int = 252) -> float:
+    log_ret = np.log(precos / precos.shift(1)).dropna()
+    sigma_diaria = log_ret.std()
+    return max(sigma_diaria * np.sqrt(dias_ano), 1e-6)
+
+
+def backtest_ap(
+    precos: pd.Series,
+    dividendos: pd.Series,
+    prazo_du: int,
+    perda_max: float,
+    risk_free: float,
+    dias_ano: int = 252,
+):
+    datas = precos.index
+    if len(datas) <= prazo_du:
+        return None
+
+    sigma_anual = estimar_vol_anual(precos, dias_ano=dias_ano)
+
+    p0 = precos.values[:-prazo_du]
+    p1 = precos.values[prazo_du:]
+    ret_preco = p1 / p0 - 1
+
+    ret_div = []
+    preco_put_bsl = []
+    custo_put_pct = []
+
+    for i in range(len(p0)):
+        ini = datas[i]
+        fim = datas[i + prazo_du]
+
+        soma_div = 0.0
+        if not dividendos.empty:
+            soma_div = dividendos.loc[(dividendos.index >= ini) & (dividendos.index <= fim)].sum()
+        ret_div.append(soma_div / p0[i])
+
+        S0 = p0[i]
+        K = S0 * (1 - perda_max)
+        T = prazo_du / dias_ano
+
+        put_price = black_scholes_put(S0, K, risk_free, sigma_anual, T)
+        preco_put_bsl.append(put_price)
+        custo_put_pct.append(put_price / S0)
+
+    ret_div = np.array(ret_div)
+    preco_put_bsl = np.array(preco_put_bsl)
+    custo_put_pct = np.array(custo_put_pct)
+
+    ret_ap_sem_div = ret_preco - custo_put_pct
+    ret_ap_com_div = ret_preco + ret_div - custo_put_pct
+
+    hedge_acionado = (ret_preco <= -perda_max).astype(int)
+    deu_certo = ((hedge_acionado == 1) | (ret_ap_com_div >= 0)).astype(int)
+
+    rent_anual_op = (1 + ret_ap_com_div) ** (dias_ano / prazo_du) - 1
+    bate_cdi = (rent_anual_op > risk_free).astype(int)
+
+    df = pd.DataFrame(
+        {
+            "data_inicio": datas[:-prazo_du],
+            "data_fim": datas[prazo_du:],
+            "preco_put_bsl": preco_put_bsl,
+            "ret_preco": ret_preco,
+            "ret_dividendos": ret_div,
+            "custo_put_pct": custo_put_pct,
+            "ret_ap_sem_div": ret_ap_sem_div,
+            "ret_ap_com_div": ret_ap_com_div,
+            "hedge_acionado": hedge_acionado,
+            "deu_certo": deu_certo,
+            "bate_cdi": bate_cdi,
+        }
     )
 
-    perda_max_ap = st.sidebar.number_input(
-        "Perda máxima protegida (%):",
-        value=5.0,
-        step=0.1,
-        format="%.2f",
-        key="perda_ap"
-    ) / 100
+    resumo = {
+        "pct_deu_certo": deu_certo.mean(),
+        "pct_bate_cdi": bate_cdi.mean(),
+        "vol_anual": sigma_anual,
+    }
 
-    risk_free_ap = st.sidebar.number_input(
-        "CDI / Risk-free anual (%):",
-        value=15.0,
-        step=0.1,
-        format="%.2f",
-        key="cdi_ap"
-    ) / 100
+    return df, resumo, dividendos
 
-    rodar_ap = st.sidebar.button("🚀 Rodar AP", key="rodar_ap")
 
-    if rodar_ap:
-        # -------------------------------
-        # 1. Preços + dividendos
-        # -------------------------------
-        precos_ap, dividendos_ap = carregar_preco_e_dividendos(ticker_ap)
-        resultado_ap = backtest_ap(precos_ap, dividendos_ap, prazo_du_ap, perda_max_ap, risk_free_ap)
+def gerar_grafico_ap(df: pd.DataFrame, ticker: str) -> BytesIO:
+    df_plot = df.copy()
+    df_plot["ret_ibov"] = gerar_ret_ibov(df_plot)
 
-        if resultado_ap is None:
-            st.error("Histórico insuficiente para esse prazo na aba AP.")
-        else:
-            df_ap, resumo_ap, dividendos_ap = resultado_ap
+    plt.figure(figsize=(12, 5))
+    plt.plot(df_plot["data_inicio"], df_plot["ret_ap_com_div"], label=f"AP – {ticker}", linewidth=2)
+    plt.plot(df_plot["data_inicio"], df_plot["ret_ibov"], label="IBOV", linewidth=2, alpha=0.8)
+    plt.axhline(0, color="black")
+    plt.title("Retornos por operação – AP x IBOV (não acumulado)", fontsize=14, weight="bold")
+    plt.xlabel("Data de início da operação")
+    plt.ylabel("Retorno no período")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
 
-            # -------------------------------
-            # 2. Cálculo DO PREÇO JUSTO HOJE
-            # -------------------------------
-            S0_atual = precos_ap.iloc[-1]
-            K_atual = S0_atual * (1 - perda_max_ap)
-            sigma_anual = resumo_ap["vol_anual"]
-            T = prazo_du_ap / 252
+    buf = BytesIO()
+    plt.savefig(buf, format="png", dpi=130, bbox_inches="tight")
+    buf.seek(0)
+    plt.close()
+    return buf
 
-            preco_put_hoje = black_scholes_put(
-                S0=S0_atual,
-                K=K_atual,
-                r=risk_free_ap,
-                sigma=sigma_anual,
-                T=T
-            )
-
-            custo_pct_hoje = preco_put_hoje / S0_atual  # porcentagem do ativo
-
-            # -------------------------------
-            # 3. MÉTRICAS
-            # -------------------------------
-            col1, col2, col3, col4, col5 = st.columns(5)
-
-            col1.metric("Estrutura Favorável (%)", f"{resumo_ap['pct_deu_certo']*100:.1f}%")
-            col2.metric("Bateu CDI (%)", f"{resumo_ap['pct_bate_cdi']*100:.1f}%")
-
-            col3.metric("Preço Justo Atual (R$)", f"R$ {preco_put_hoje:.4f}")
-            col4.metric("Custo Atual da Put (% do ativo)", f"{custo_pct_hoje*100:.2f}%")
-
-            col5.metric("Vol anual usada", f"{sigma_anual*100:.1f}%")
-
-            # -------------------------------
-            # 4. Dividendos (debug)
-            # -------------------------------
-            st.subheader("📌 Dividendos (data EX – Yahoo) – AP")
-            if dividendos_ap.empty:
-                st.warning("Nenhum dividendo encontrado no período.")
-            else:
-                st.dataframe(dividendos_ap.rename("valor_por_acao"))
-
-            # -------------------------------
-            # 5. Preço justo da put por operação (histórico)
-            # -------------------------------
-            st.subheader("📘 Preço justo da Put (BSL) por operação no backtest")
-            st.dataframe(df_ap[["data_inicio", "data_fim", "preco_put_bsl"]])
-
-            # -------------------------------
-            # 6. Gráfico AP x IBOV
-            # -------------------------------
-            graf_ap = gerar_grafico_ap(df_ap, ticker_ap)
-            st.image(graf_ap, caption="Retornos por operação – AP x IBOV")
-
-            # -------------------------------
-            # 7. Detalhamento da operação AP
-            # -------------------------------
-            st.subheader("📄 Detalhamento – AP")
-            st.dataframe(df_ap)
 
 # ============================================================
 # STREAMLIT – DASHBOARD UNIFICADO
@@ -264,11 +283,12 @@ st.title("📈 Backtest de Estruturas – Collar & Alocação Protegida")
 st.markdown(
     """
     Ambiente unificado para análise de **Collar** e **Alocação Protegida (AP)**,
-    com uso de preços reais (Yahoo), dividendos, CDI e precificação BS para puts.
+    com preços reais (Yahoo), dividendos, CDI e precificação Black-Scholes.
     """
 )
 
 tab_collar, tab_ap = st.tabs(["📊 Collar", "🛡️ Alocação Protegida (AP)"])
+
 
 # ------------------------------------------------------------
 # ABA COLLAR
@@ -340,8 +360,9 @@ with tab_collar:
             st.subheader("📄 Detalhamento – Collar")
             st.dataframe(df_c)
 
+
 # ------------------------------------------------------------
-# ABA AP
+# ABA AP – ALOCAÇÃO PROTEGIDA
 # ------------------------------------------------------------
 with tab_ap:
     st.subheader("🛡️ Estratégia Alocação Protegida (AP)")
@@ -378,6 +399,7 @@ with tab_ap:
     rodar_ap = st.sidebar.button("🚀 Rodar AP", key="rodar_ap")
 
     if rodar_ap:
+        # 1) Preços + dividendos
         precos_ap, dividendos_ap = carregar_preco_e_dividendos(ticker_ap)
         resultado_ap = backtest_ap(precos_ap, dividendos_ap, prazo_du_ap, perda_max_ap, risk_free_ap)
 
@@ -386,23 +408,44 @@ with tab_ap:
         else:
             df_ap, resumo_ap, dividendos_ap = resultado_ap
 
-            col1, col2, col3, col4 = st.columns(4)
+            # 2) Preço justo ATUAL da put (HOJE)
+            S0_atual = precos_ap.iloc[-1]
+            K_atual = S0_atual * (1 - perda_max_ap)
+            sigma_anual = resumo_ap["vol_anual"]
+            T = prazo_du_ap / 252
+
+            preco_put_hoje = black_scholes_put(
+                S0=S0_atual,
+                K=K_atual,
+                r=risk_free_ap,
+                sigma=sigma_anual,
+                T=T,
+            )
+            custo_pct_hoje = preco_put_hoje / S0_atual
+
+            # 3) Métricas principais
+            col1, col2, col3, col4, col5 = st.columns(5)
             col1.metric("Estrutura Favorável (%)", f"{resumo_ap['pct_deu_certo']*100:.1f}%")
             col2.metric("Bateu CDI (%)", f"{resumo_ap['pct_bate_cdi']*100:.1f}%")
-            col3.metric("Preço Justo Médio da Put", f"R$ {resumo_ap['preco_put_medio']:.4f}")
-            col4.metric("Vol anual usada", f"{resumo_ap['vol_anual']*100:.1f}%")
+            col3.metric("Preço Justo Atual (R$)", f"R$ {preco_put_hoje:.4f}")
+            col4.metric("Custo Atual da Put (% do ativo)", f"{custo_pct_hoje*100:.2f}%")
+            col5.metric("Vol anual usada", f"{sigma_anual*100:.1f}%")
 
+            # 4) Dividendos
             st.subheader("📌 Dividendos (data EX – Yahoo) – AP")
             if dividendos_ap.empty:
                 st.warning("Nenhum dividendo encontrado no período.")
             else:
                 st.dataframe(dividendos_ap.rename("valor_por_acao"))
 
-            st.subheader("Preço justo da Put (BSL) por operação")
+            # 5) Preço justo da put por operação no backtest
+            st.subheader("📘 Preço justo da Put (BSL) por operação (histórico)")
             st.dataframe(df_ap[["data_inicio", "data_fim", "preco_put_bsl"]])
 
+            # 6) Gráfico AP x IBOV
             graf_ap = gerar_grafico_ap(df_ap, ticker_ap)
             st.image(graf_ap, caption="Retornos por operação – AP x IBOV")
 
+            # 7) Detalhamento
             st.subheader("📄 Detalhamento – AP")
             st.dataframe(df_ap)
