@@ -849,12 +849,12 @@ Esse spread é aplicado em todas as datas históricas, simulando o fato de que, 
 # FENCE – PUT Alta, PUT Baixa, CALL
 # ------------------------------------------------------------
 with tab_fence:
-    st.subheader("🧱 Fence (PUT Spread + CALL)")
+    st.subheader("🧱 Fence")
 
     st.markdown("""
 ### 📘 Como interpretar os resultados – Fence
 
-**Estrutura Favorável**  
+**Estrutura Favorável** 
 A operação é considerada favorável quando o retorno do ativo fica **inteiramente dentro da zona segura**:""")
 
 
