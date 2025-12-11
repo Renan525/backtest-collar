@@ -846,13 +846,127 @@ Esse spread é aplicado em todas as datas históricas, simulando o fato de que, 
             st.dataframe(df_fin)
 
 # ------------------------------------------------------------
-# FENCE – PUT Alta, PUT Baixa, CALL
+# FENCE – PUT Alta, PUT Baixa, CALL (CUSTO ZERO)
 # ------------------------------------------------------------
 with tab_fence:
-    st.subheader("🧱 Fence")
+    st.subheader("🧱 Fence (PUT Spread + CALL)")
 
     st.markdown("""
 ### 📘 Como interpretar os resultados – Fence
+
+**Estrutura Favorável**  
+A operação é considerada favorável quando o **retorno do ativo** fica dentro da zona segura:
+
+    Perda Máxima (PUT Baixa) ≤ Retorno do ativo ≤ Ganho Máximo (CALL)
+
+Ou seja:
+- Não houve perda adicional abaixo da PUT Baixa  
+- Não houve limitação de ganho acima da CALL  
+
+**Payoff resumido:**
+- Acima do strike da CALL → ganho limitado  
+- Entre PUT Alta e CALL → participa 1:1  
+- Entre PUT Baixa e PUT Alta → retorno travado na perda protegida  
+- Abaixo da PUT Baixa → perda adicional volta a crescer  
+""")
+
+    # --------------------------
+    # INPUTS DO OPERADOR
+    # --------------------------
+
+    ticker_fence = st.text_input("Ticker:", "EZTC3.SA", key="t_fence_main")
+
+    prazo_du_fence = st.number_input(
+        "Prazo (dias úteis)",
+        min_value=10,
+        max_value=252,
+        value=63,
+        key="prazo_fence_main"
+    )
+
+    perda_protegida_pct = st.number_input(
+        "Perda Protegida Inicial (PUT Alta) – em %",
+        min_value=0.0,
+        max_value=100.0,
+        value=5.0,
+        key="perda_protegida_main"
+    ) / 100
+
+    perda_max_pct = st.number_input(
+        "Perda Máxima (PUT Baixa) – em %",
+        min_value=0.0,
+        max_value=100.0,
+        value=15.0,
+        key="perda_max_main"
+    ) / 100
+
+    ganho_max_fence_pct = st.number_input(
+        "Ganho Máximo (CALL) – em %",
+        min_value=0.0,
+        max_value=100.0,
+        value=10.0,
+        key="ganho_fence_main"
+    ) / 100
+
+    # --------------------------
+    # VALIDAÇÃO IMPORTANTE
+    # --------------------------
+
+    if perda_max_pct <= perda_protegida_pct:
+        st.error("A 'Perda Máxima (PUT Baixa)' deve ser maior que a 'Perda Protegida (PUT Alta)' em %.")
+        st.stop()
+
+    # --------------------------
+    # BOTÃO PARA RODAR
+    # --------------------------
+
+    if st.button("Rodar Fence", key="rodar_fence_main"):
+
+        precos_f, divs_f = carregar_preco_e_dividendos(ticker_fence)
+
+        resultado_fence = backtest_fence(
+            precos_f,
+            divs_f,
+            cdi_df,
+            prazo_du_fence,
+            -perda_protegida_pct,   # PAYOFF usa negativos
+            -perda_max_pct,
+            ganho_max_fence_pct
+        )
+
+        if resultado_fence is None:
+            st.error("Histórico insuficiente para rodar o backtest.")
+        else:
+            df_fence, resumo_fence, _ = resultado_fence
+
+            # --------------------------
+            # MÉTRICAS
+            # --------------------------
+
+            c1, c2 = st.columns(2)
+            c1.metric(
+                "Estrutura Favorável (%)",
+                f"{resumo_fence['pct_deu_certo']*100:.1f}%"
+            )
+            c2.metric(
+                "Bateu CDI (%)",
+                f"{resumo_fence['pct_bate_cdi']*100:.1f}%"
+            )
+
+            # --------------------------
+            # GRÁFICO
+            # --------------------------
+
+            st.subheader("Gráfico – Fence x IBOV")
+            graf = gerar_grafico_fence(df_fence, ticker_fence)
+            st.image(graf)
+
+            # --------------------------
+            # DETALHAMENTO
+            # --------------------------
+
+            st.subheader("Tabela Detalhada")
+            st.dataframe(df_fence)
 
 **Estrutura Favorável** 
 A operação é considerada favorável quando o retorno do ativo fica **inteiramente dentro da zona segura**:""")
