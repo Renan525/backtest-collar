@@ -857,10 +857,9 @@ with tab_fence:
 A Fence oferece:
 - Uma **faixa de proteção parcial** entre a PUT Alta e a PUT Baixa  
 - **Ganhos limitados** pela CALL vendida  
-- Estrutura de **custo zero** na montagem (ajuste via strikes).
+- Estrutura de **custo zero** na montagem (via strikes)
 
 **Estrutura Favorável**  
-A operação é considerada favorável quando o retorno do ativo fica **inteiro dentro da zona segura**:
+A operação é considerada favorável quando o retorno do ativo fica **inteiramente dentro da zona segura**:
 
-```text
-Perda Máxima (PUT Baixa) ≤ Retorno do ativo ≤ Ganho Máximo (CALL)
+
